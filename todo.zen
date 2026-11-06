@@ -1,0 +1,475 @@
+import (CLIColor, CLITable) from "cli"
+
+CLIColor color
+
+fn okOwned(string msg) {
+  color.success(msg)
+  msg.free()
+}
+
+fn warnOwned(string msg) {
+  color.warn(msg)
+  msg.free()
+}
+
+fn errOwned(string msg) {
+  color.error(msg)
+  msg.free()
+}
+
+fn idMessage(string prefix, int id, string suffix) string {
+  string sid = String(id)
+  string first = prefix + sid
+  sid.free()
+
+  string result = first + suffix
+  first.free()
+
+  return result
+}
+
+fn newTable() CLITable {
+  CLITable table
+
+  table.row([
+    "ID",
+    "TITLE",
+    "PRIORITY",
+    "COMPLETED",
+    "TIMESTAMP"
+  ])
+
+  return table
+}
+
+fn addRow(CLITable table, Map v, List<string> owned) {
+  string id = String(v.getInt("id"))
+  string title = v.getString("title")
+  string priority = v.getString("priority")
+  string timestamp = v.getString("timestamp")
+  bool completed = v.getBool("completed")
+
+  table.row([
+    id,
+    title,
+    priority,
+    completed ? "Yes" : "No",
+    timestamp
+  ])
+
+  owned.push(id)
+  owned.push(title)
+  owned.push(priority)
+  owned.push(timestamp)
+}
+
+fn freeOwned(List<string> owned) {
+  owned.free()
+}
+
+struct TODO {
+  List<Map> data = []
+  string folderName = ".todozen"
+  string dataFile = "todo_zen.json"
+
+  close() {
+    loop (item of this.data) {
+      item.free()
+    }
+
+    this.data.free()
+  }
+
+  // Check whether an ID already exists
+  private idExists(int id) bool {
+    loop (item of this.data) {
+      if (item.getInt("id") == id) {
+        return true
+      }
+    }
+
+    return false
+  }
+
+  // Generate a unique 5-digit ID
+  private genId() int {
+    int id = 0
+
+    do {
+      id = crypto.randomInt(10000, 100000)
+    } while (this.idExists(id))
+
+    return id
+  }
+
+  // Load saved tasks
+  private load() void {
+    string filePath = path.join(this.folderName, this.dataFile)
+
+    if (!fs.exists(filePath)) {
+      return
+    }
+
+    string content = fs.readFile(filePath)
+    filePath.free()
+
+    if (length(content) == 0 || content == "{}") {
+      return
+    }
+
+    Json json
+    json.parse(content)
+    content.free()
+
+    JsonArray array = json.getRootArray()
+
+    loop (int i = 0, i < array.arrayLength(), i++) {
+      JsonObject obj = array.arrayGetObject(i)
+
+      Map item
+      item.setInt("id", obj.getInt("id"))
+      item.setString("title", obj.getString("title"))
+      item.setString("priority", obj.getString("priority"))
+      item.setBool("completed", obj.getBool("completed"))
+      item.setString("timestamp", obj.getString("timestamp"))
+
+      this.data.push(item)
+    }
+
+    json.free()
+  }
+
+  // Save tasks as a JSON array
+  private save() bool {
+    if (!fs.exists(this.folderName)) {
+      fs.makeDir(this.folderName)
+    }
+
+    string output = "["
+    bool first = true
+
+    loop (item of this.data) {
+      if (!first) {
+        string withComma = output + ","
+        output.free()
+        output = withComma
+      }
+
+      string itemJson = item.json()
+      string withItem = output + itemJson
+      itemJson.free()
+      output.free()
+      output = withItem
+
+      first = false
+    }
+
+    string closed = output + "]"
+    output.free()
+
+    string filePath = path.join(this.folderName, this.dataFile)
+    int status = fs.writeFile(filePath, closed)
+
+    filePath.free()
+    closed.free()
+
+    return status == 0
+  }
+
+  // Add a task
+  add(string title, string priority = "medium") {
+    if (length(title) == 0) {
+      color.error("Task title cannot be empty.")
+      return
+    }
+
+    if (
+      priority != "high" &&
+      priority != "medium" &&
+      priority != "low"
+    ) {
+      color.error("Invalid priority. Use: high, medium or low.")
+      return
+    }
+
+    this.load()
+
+    string timestamp = time.format(time.now())
+
+    this.data.push({
+      id: this.genId(),
+      title: title,
+      priority: priority,
+      completed: false,
+      timestamp: timestamp
+    })
+
+    if (this.save()) {
+      string message = "Task added: " + title
+      okOwned(message)
+    } else {
+      string message = "Unable to save task: " + title
+      errOwned(message)
+    }
+  }
+
+  // List all tasks
+  list() {
+    this.load()
+
+    if (this.data.length == 0) {
+      color.warn("No tasks found.")
+      color.info("Create one with: todozen add <title> [priority]")
+      return
+    }
+
+    CLITable table = newTable()
+    List<string> owned = []
+
+    loop (v of this.data) {
+      addRow(table, v, owned)
+    }
+
+    table.render()
+    freeOwned(owned)
+  }
+
+
+  // List tasks created today
+  today() {
+    this.load()
+
+    string now = time.format(time.now())
+    string today = slice(now, 0, 10)
+    now.free()
+
+    CLITable table = newTable()
+    List<string> owned = []
+    bool found = false
+
+    loop (v of this.data) {
+      string timestamp = v.getString("timestamp")
+      string ymd = slice(timestamp, 0, 10)
+
+      if (ymd == today) {
+        found = true
+        addRow(table, v, owned)
+      }
+
+      ymd.free()
+    }
+
+    if (found) {
+      table.render()
+    } else {
+      string message = "No tasks created today (" + today + ")."
+      warnOwned(message)
+    }
+
+    freeOwned(owned)
+    today.free()
+  }
+
+  // List completed tasks
+  done() {
+    this.load()
+
+    CLITable table = newTable()
+    List<string> owned = []
+    bool found = false
+
+    loop (v of this.data) {
+      if (v.getBool("completed")) {
+        found = true
+        addRow(table, v, owned)
+      }
+    }
+
+    if (found) {
+      table.render()
+    } else {
+      color.warn("No completed tasks found.")
+    }
+
+    freeOwned(owned)
+  }
+
+  // Mark a task as completed
+  finish(int id) {
+    this.load()
+
+    loop (v of this.data) {
+      if (v.getInt("id") == id) {
+        if (v.getBool("completed")) {
+          color.warn("This task is already completed.")
+          return
+        }
+
+        v.setBool("completed", true)
+
+        if (this.save()) {
+          okOwned(idMessage("Task completed (ID: ", id, ")"))
+        } else {
+          color.error("Unable to save changes.")
+        }
+
+        return
+      }
+    }
+
+    warnOwned(idMessage("No task found with ID ", id, "."))
+  }
+
+  // Edit a task
+  edit(int id, string title, string priority, bool completion, bool completionNeeded) {
+    // Validate the priority only when a new one was provided
+    if (
+      length(priority) > 0 &&
+      priority != "high" &&
+      priority != "medium" &&
+      priority != "low"
+    ) {
+      color.error("Invalid priority. Use: high, medium or low.")
+      return
+    }
+
+    this.load()
+
+    loop (v of this.data) {
+      if (v.getInt("id") == id) {
+        if (length(title) > 0) {
+          v.setString("title", title)
+        }
+
+        if (length(priority) > 0) {
+          v.setString("priority", priority)
+        }
+
+        if (completionNeeded) {
+          v.setBool("completed", completion)
+        }
+
+        if (this.save()) {
+          okOwned(idMessage("Task ", id, " updated."))
+        } else {
+          color.error("Unable to save changes.")
+        }
+
+        return
+      }
+    }
+
+    warnOwned(idMessage("No task found with ID ", id, "."))
+  }
+
+  // Remove a task
+  remove(int id) {
+    this.load()
+
+    loop (int i = 0, i < this.data.length, i++) {
+      if (this.data[i].getInt("id") == id) {
+        Map item = this.data[i]
+        this.data.removeAt(i)
+        item.free()
+
+        if (this.save()) {
+          okOwned(idMessage("Task ", id, " removed."))
+        } else {
+          color.error("Unable to save changes.")
+        }
+
+        return
+      }
+    }
+
+    warnOwned(idMessage("No task found with ID ", id, "."))
+  }
+
+  // Find a task by ID
+  search(int id) {
+    this.load()
+
+    CLITable table = newTable()
+    List<string> owned = []
+    bool found = false
+
+    loop (v of this.data) {
+      if (v.getInt("id") == id) {
+        found = true
+        addRow(table, v, owned)
+      }
+    }
+
+    if (found) {
+      table.render()
+    } else {
+      warnOwned(idMessage("No task found with ID ", id, "."))
+    }
+
+    freeOwned(owned)
+  }
+
+  // Show statistics
+  stats() {
+    this.load()
+
+    int total = this.data.length
+    int completed = 0
+
+    loop (v of this.data) {
+      if (v.getBool("completed")) {
+        completed++
+      }
+    }
+
+    int pending = total - completed
+    double rate = 0.0
+
+    if (total > 0) {
+      rate = Double(completed) / total * 100
+    }
+
+    string sTotal = String(total)
+    string sCompleted = String(completed)
+    string sPending = String(pending)
+    string sRateNumber = String(rate)
+    string sRate = sRateNumber + "%"
+    sRateNumber.free()
+
+    CLITable table
+
+    table.row([
+      "TOTAL",
+      "COMPLETED",
+      "PENDING",
+      "COMPLETION RATE"
+    ])
+
+    table.row([
+      sTotal,
+      sCompleted,
+      sPending,
+      sRate
+    ])
+
+    table.render()
+
+    sTotal.free()
+    sCompleted.free()
+    sPending.free()
+    sRate.free()
+  }
+
+  // Delete all tasks
+  clear() {
+    string filePath = path.join(this.folderName, this.dataFile)
+
+    if (fs.exists(filePath)) {
+      fs.deleteFile(filePath)
+    }
+
+    filePath.free()
+  }
+}
+
+export(TODO)

@@ -1,0 +1,272 @@
+import (TODO) from "todo.zen"
+import (CLIColor, CLIInput) from "cli"
+
+CLIColor color
+CLIInput cin
+TODO todo
+
+List<string> args = sys.argv()
+
+// Rejects IDs that failed to parse (Int() returns 0 on bad input)
+fn validId(int id) bool {
+  if (id <= 0) {
+    color.error("Invalid task ID. Use the numeric ID shown by 'list'.")
+    return false
+  }
+
+  return true
+}
+
+fn help() {
+  screen(`
+  ===° TODO Zen °===
+
+  Usage: todozen <command> [arguments]
+
+  Commands:
+    add <title> [priority]   Add a task
+    list                     Show all tasks
+    today                    Show tasks created today
+    done                     Show completed tasks
+    finish [id]              Mark a task as completed
+    edit [id]                Edit a task
+    remove [id]              Remove a task (alias: delete)
+    search [id]              Find a task by ID
+    stats                    Show task statistics
+    clear                    Delete all tasks
+    help                     Show this message
+
+  [ ] optional
+  Priority: high, medium, low (default: medium)
+  `)
+}
+
+fn errOwned(string msg) {
+  color.error(msg)
+  msg.free()
+}
+
+fn tooMany(int max) bool {
+  if (args.length > max) {
+    color.error("Too many arguments.")
+    help()
+    return true
+  }
+
+  return false
+}
+
+// Takes the ID from the arguments, or prompts for it
+fn readId() int {
+  if (args.length > 2) {
+    if (!matchRegex(args[2], "^[0-9]{1,9}$")) {
+      return 0
+    }
+
+    return Int(args[2])
+  }
+
+  string raw = input("Enter task ID: ")
+  int id = 0
+
+  if (matchRegex(raw, "^[0-9]{1,9}$")) {
+    id = Int(raw)
+  }
+
+  raw.free()
+  return id
+}
+
+fn runAdd() int {
+  if (args.length < 3 || args.length > 4) {
+    color.error("Usage: todozen add <title> [priority]")
+    return 1
+  }
+
+  string priority = "medium"
+
+  if (args.length == 4) {
+    priority = args[3]
+  }
+
+  todo.add(args[2], priority)
+  return 0
+}
+
+fn runEdit() int {
+  if (tooMany(3)) {
+    return 1
+  }
+
+  int id = readId()
+
+  if (!validId(id)) {
+    return 1
+  }
+  
+  string title = ""
+  string priority = ""
+  bool complete = false
+  bool completionNeed = false
+  bool ownTitle = false
+  bool ownPriority = false
+
+  if (cin.confirm("Update title?")) {
+    title = input("New title: ")
+    ownTitle = true
+  }
+
+  if (cin.confirm("Update priority?")) {
+    priority = input("New priority (high, medium, low): ")
+    ownPriority = true
+  }
+
+  if (cin.confirm("Update completion status?")) {
+    completionNeed = true
+    complete = cin.confirm("Mark as completed?")
+  }
+
+  if (!ownTitle && !ownPriority && !completionNeed) {
+    color.info("No changes made.")
+    return 0
+  }
+
+  todo.edit(id, title, priority, complete, completionNeed)
+
+  if (ownTitle) {
+    title.free()
+  }
+
+  if (ownPriority) {
+    priority.free()
+  }
+
+  return 0
+}
+
+fn runClear() int {
+  if (cin.confirm("This will permanently delete all tasks. Continue?")) {
+    todo.clear()
+    color.success("All tasks have been deleted.")
+  } else {
+    color.info("Cancelled. Your tasks are unchanged.")
+  }
+
+  return 0
+}
+
+fn run(string command) int {
+  if (command == "add") {
+    return runAdd()
+  }
+
+  if (
+    command == "list" ||
+    command == "today" ||
+    command == "done" ||
+    command == "stats"
+  ) {
+    if (args.length != 2) {
+      string message = command + " does not accept arguments."
+      errOwned(message)
+      return 1
+    }
+
+    if (command == "list") {
+      todo.list()
+    }
+
+    if (command == "today") {
+      todo.today()
+    }
+
+    if (command == "done") {
+      todo.done()
+    }
+
+    if (command == "stats") {
+      todo.stats()
+    }
+
+    return 0
+  }
+
+  if (command == "finish") {
+    if (tooMany(3)) {
+      return 1
+    }
+
+    int id = readId()
+
+    if (!validId(id)) {
+      return 1
+    }
+
+    todo.finish(id)
+    return 0
+  }
+
+  if (command == "remove" || command == "delete") {
+    if (tooMany(3)) {
+      return 1
+    }
+
+    int id = readId()
+
+    if (!validId(id)) {
+      return 1
+    }
+
+    todo.remove(id)
+    return 0
+  }
+
+  if (command == "search") {
+    if (tooMany(3)) {
+      return 1
+    }
+
+    int id = readId()
+
+    if (!validId(id)) {
+      return 1
+    }
+
+    todo.search(id)
+    return 0
+  }
+
+  if (command == "edit") {
+    return runEdit()
+  }
+
+  if (command == "clear") {
+    return runClear()
+  }
+
+  if (command == "help") {
+    help()
+    return 0
+  }
+
+  string message = "Unknown command: " + command
+  errOwned(message)
+  help()
+  return 1
+}
+
+fn dispatch() int {
+  if (args.length < 2) {
+    help()
+    return 0
+  }
+
+  return run(args[1])
+}
+
+int code = dispatch()
+
+todo.close()
+args.free()
+
+os.exit(code)
